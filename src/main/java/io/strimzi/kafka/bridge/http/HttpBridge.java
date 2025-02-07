@@ -18,7 +18,7 @@ import io.strimzi.kafka.bridge.IllegalEmbeddedFormatException;
 import io.strimzi.kafka.bridge.config.BridgeConfig;
 import io.strimzi.kafka.bridge.http.converter.JsonUtils;
 import io.strimzi.kafka.bridge.http.model.HttpBridgeError;
-import io.strimzi.kafka.bridge.metrics.MetricsReporter;
+import io.strimzi.kafka.bridge.metrics.MetricsCollector;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Promise;
 import io.vertx.core.file.FileSystem;
@@ -76,17 +76,17 @@ public class HttpBridge extends AbstractVerticle {
 
     private final Map<ConsumerInstanceId, Long> timestampMap = new HashMap<>();
 
-    private final MetricsReporter metricsReporter;
+    private final MetricsCollector metricsCollector;
 
     /**
      * Constructor
      *
      * @param bridgeConfig bridge configuration
-     * @param metricsReporter MetricsReporter instance for scraping metrics from different registries
+     * @param metricsCollector metricsCollector instance for scraping metrics from different registries
      */
-    public HttpBridge(BridgeConfig bridgeConfig, MetricsReporter metricsReporter) {
+    public HttpBridge(BridgeConfig bridgeConfig, MetricsCollector metricsCollector) {
         this.bridgeConfig = bridgeConfig;
-        this.metricsReporter = metricsReporter;
+        this.metricsCollector = metricsCollector;
     }
 
     private void bindHttpServer(Promise<Void> startPromise) {
@@ -168,9 +168,7 @@ public class HttpBridge extends AbstractVerticle {
                         routerBuilder.operation(this.OPENAPI.getOperationId().toString()).handler(this.OPENAPI);
                         routerBuilder.operation(this.OPENAPIV2.getOperationId().toString()).handler(this.OPENAPIV2);
                         routerBuilder.operation(this.OPENAPIV3.getOperationId().toString()).handler(this.OPENAPIV3);
-                        if (metricsReporter != null) {
-                            routerBuilder.operation(this.METRICS.getOperationId().toString()).handler(this.METRICS);
-                        }
+                        routerBuilder.operation(this.METRICS.getOperationId().toString()).handler(this.METRICS);
                         routerBuilder.operation(this.INFO.getOperationId().toString()).handler(this.INFO);
                         if (this.bridgeConfig.getHttpConfig().isCorsEnabled()) {
                             routerBuilder.rootHandler(getCorsHandler());
@@ -180,14 +178,14 @@ public class HttpBridge extends AbstractVerticle {
                         }
 
                         this.router = routerBuilder.createRouter();
-                        
+
                         // handling validation errors and not existing endpoints
                         this.router.errorHandler(HttpResponseStatus.BAD_REQUEST.code(), this::errorHandler);
                         this.router.errorHandler(HttpResponseStatus.NOT_FOUND.code(), this::errorHandler);
-        
-                        if (this.metricsReporter != null && this.metricsReporter.getVertxRegistry() != null) {
+
+                        if (this.metricsCollector != null && this.metricsCollector.getVertxRegistry() != null) {
                             // exclude to report the HTTP server metrics for the /metrics endpoint itself
-                            this.metricsReporter.getVertxRegistry().config().meterFilter(
+                            this.metricsCollector.getVertxRegistry().config().meterFilter(
                                     MeterFilter.deny(meter -> "/metrics".equals(meter.getTag(Label.HTTP_PATH.toString())))
                             );
                         }
@@ -559,10 +557,14 @@ public class HttpBridge extends AbstractVerticle {
     }
 
     private void metrics(RoutingContext routingContext) {
-        routingContext.response()
+        if (metricsCollector != null) {
+            routingContext.response()
                 .putHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
                 .setStatusCode(HttpResponseStatus.OK.code())
-                .end(metricsReporter.scrape());
+                .end(metricsCollector.scrape());
+        } else {
+            HttpUtils.sendResponse(routingContext, HttpResponseStatus.NOT_FOUND.code(), null, null);
+        }
     }
 
     private void information(RoutingContext routingContext) {
@@ -608,8 +610,6 @@ public class HttpBridge extends AbstractVerticle {
             }
         } else if (routingContext.statusCode() == HttpResponseStatus.NOT_FOUND.code()) {
             message = HttpResponseStatus.NOT_FOUND.reasonPhrase();
-        } else if (routingContext.statusCode() == HttpResponseStatus.NOT_IMPLEMENTED.code()) {
-            message = HttpResponseStatus.NOT_IMPLEMENTED.reasonPhrase();
         }
 
         HttpBridgeError error = new HttpBridgeError(routingContext.statusCode(), message);
@@ -826,7 +826,7 @@ public class HttpBridge extends AbstractVerticle {
             openapi(routingContext);
         }
     };
-    
+
     final static HttpOpenApiOperation OPENAPIV2 = new HttpOpenApiOperation(HttpOpenApiOperations.OPENAPIV2) {
 
         @Override

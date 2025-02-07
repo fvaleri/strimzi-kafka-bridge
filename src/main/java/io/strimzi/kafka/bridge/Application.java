@@ -2,16 +2,15 @@
  * Copyright Strimzi authors.
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
-
 package io.strimzi.kafka.bridge;
 
 import io.strimzi.kafka.bridge.config.BridgeConfig;
 import io.strimzi.kafka.bridge.config.ConfigRetriever;
 import io.strimzi.kafka.bridge.http.HttpBridge;
-import io.strimzi.kafka.bridge.metrics.JmxCollectorRegistry;
-import io.strimzi.kafka.bridge.metrics.MetricsReporter;
+import io.strimzi.kafka.bridge.metrics.JmxMetricsCollector;
+import io.strimzi.kafka.bridge.metrics.MetricsCollector;
 import io.strimzi.kafka.bridge.metrics.MetricsType;
-import io.strimzi.kafka.bridge.metrics.StrimziCollectorRegistry;
+import io.strimzi.kafka.bridge.metrics.StrimziMetricsCollector;
 import io.strimzi.kafka.bridge.tracing.TracingUtil;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
@@ -38,7 +37,6 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.EnumSet;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -85,14 +83,15 @@ public class Application {
         Promise<HttpBridge> httpPromise = Promise.promise();
 
         Vertx vertx = createVertxInstance(bridgeConfig);
-        MetricsReporter metricsReporter = getMetricsReporter(bridgeConfig);
-        HttpBridge httpBridge = new HttpBridge(bridgeConfig, metricsReporter);
+        MetricsCollector metricsCollector = getMetricsCollector(bridgeConfig);
+        HttpBridge httpBridge = new HttpBridge(bridgeConfig, metricsCollector);
+        
         vertx.deployVerticle(httpBridge)
             .onComplete(done -> {
                 if (done.succeeded()) {
                     LOGGER.info("HTTP verticle instance deployed [{}]", done.result());
-                    if (metricsReporter != null) {
-                        LOGGER.info("Metrics of type '{}' enabled and exposed on /metrics endpoint", bridgeConfig.getMetrics());
+                    if (metricsCollector != null) {
+                        LOGGER.info("Metrics of type '{}' enabled and exposed on /metrics endpoint", bridgeConfig.getMetricsType());
                     }
                     httpPromise.complete(httpBridge);
                 } else {
@@ -106,7 +105,7 @@ public class Application {
 
     private static Vertx createVertxInstance(BridgeConfig bridgeConfig) {
         VertxOptions vertxOptions = new VertxOptions();
-        if (bridgeConfig.getMetrics() != null) {
+        if (bridgeConfig.getMetricsType() != null) {
             vertxOptions.setMetricsOptions(metricsOptions()); // enable Vertx metrics
         }
         Vertx vertx = Vertx.vertx(vertxOptions);
@@ -119,47 +118,48 @@ public class Application {
      * @return instance of the MicrometerMetricsOptions on Vert.x
      */
     private static MicrometerMetricsOptions metricsOptions() {
-        Set<String> set = new HashSet<>();
-        set.add(MetricsDomain.NAMED_POOLS.name());
-        set.add(MetricsDomain.VERTICLES.name());
         return new MicrometerMetricsOptions()
             .setPrometheusOptions(new VertxPrometheusOptions().setEnabled(true))
             // define the labels on the HTTP server related metrics
             .setLabels(EnumSet.of(Label.HTTP_PATH, Label.HTTP_METHOD, Label.HTTP_CODE))
             // disable metrics about pool and verticles
-            .setDisabledMetricsCategories(set)
-            .setJvmMetricsEnabled(true)
+            .setDisabledMetricsCategories(
+                Set.of(MetricsDomain.NAMED_POOLS.name(), MetricsDomain.VERTICLES.name())
+            ).setJvmMetricsEnabled(true)
             .setEnabled(true);
     }
 
-    private static MetricsReporter getMetricsReporter(BridgeConfig bridgeConfig) 
+    private static MetricsCollector getMetricsCollector(BridgeConfig bridgeConfig) 
             throws MalformedObjectNameException, IOException {
-        if (bridgeConfig.getMetrics() != null) {
-            if (bridgeConfig.getMetrics().equals(MetricsType.JMX_EXPORTER.toString())) {
-                return new MetricsReporter(getJmxCollectorRegistry(bridgeConfig));
-            } else if (bridgeConfig.getMetrics().equals(MetricsType.STRIMZI_REPORTER.toString())) {
-                return new MetricsReporter(new StrimziCollectorRegistry());
+        if (bridgeConfig.getMetricsType() != null) {
+            if (bridgeConfig.getMetricsType() == MetricsType.JMX_EXPORTER) {
+                return getJmxMetricsCollector(bridgeConfig);
+            } else if (bridgeConfig.getMetricsType() == MetricsType.STRIMZI_REPORTER) {
+                return new StrimziMetricsCollector();
             }
         }
         return null;
     }
 
     /**
-     * Return a JmxCollectorRegistry instance with the YAML configuration filters.
-     * This is loaded from a custom config file if present, or from the default configuration file.
+     * Return a JmxMetricsCollector instance with the YAML configuration filters.
+     * This is loaded from a custom config file if present or from the default configuration file.
      *
      * @return JmxCollectorRegistry instance
      * @throws MalformedObjectNameException
      * @throws IOException
      */
-    private static JmxCollectorRegistry getJmxCollectorRegistry(BridgeConfig bridgeConfig) throws MalformedObjectNameException, IOException {
+    private static JmxMetricsCollector getJmxMetricsCollector(BridgeConfig bridgeConfig) throws MalformedObjectNameException, IOException {
         if (bridgeConfig.getJmxExporterConfigPath() != null && Files.exists(bridgeConfig.getJmxExporterConfigPath())) {
-            // read custom configuration file
+            // load custom configuration file
             LOGGER.info("Loading custom JMX Exporter configuration from {}", bridgeConfig.getJmxExporterConfigPath());
             String yaml = Files.readString(bridgeConfig.getJmxExporterConfigPath(), StandardCharsets.UTF_8);
-            return new JmxCollectorRegistry(yaml);
+            return new JmxMetricsCollector(yaml);
         } else {
-            // fallback to default configuration
+            // load default configuration
+            if (bridgeConfig.getJmxExporterConfigPath() != null && !Files.exists(bridgeConfig.getJmxExporterConfigPath())) {
+                LOGGER.warn("Custom JMX Exporter configuration file not found: {}", bridgeConfig.getJmxExporterConfigPath());
+            }
             LOGGER.info("Loading default JMX Exporter configuration");
             InputStream is = Application.class.getClassLoader().getResourceAsStream("jmx_metrics_config.yaml");
             if (is == null) {
@@ -169,7 +169,7 @@ public class Application {
                 String yaml = reader
                     .lines()
                     .collect(Collectors.joining("\n"));
-                return new JmxCollectorRegistry(yaml);
+                return new JmxMetricsCollector(yaml);
             }
         }
     }

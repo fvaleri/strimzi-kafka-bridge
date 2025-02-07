@@ -10,8 +10,7 @@ import io.strimzi.kafka.bridge.config.KafkaConfig;
 import io.strimzi.kafka.bridge.config.KafkaConsumerConfig;
 import io.strimzi.kafka.bridge.config.KafkaProducerConfig;
 import io.strimzi.kafka.bridge.http.services.ConsumerService;
-import io.strimzi.kafka.bridge.metrics.JmxCollectorRegistry;
-import io.strimzi.kafka.bridge.metrics.MetricsReporter;
+import io.strimzi.kafka.bridge.metrics.JmxMetricsCollector;
 import io.strimzi.kafka.bridge.utils.Urls;
 import io.strimzi.test.container.StrimziKafkaContainer;
 import io.vertx.core.Vertx;
@@ -78,7 +77,7 @@ public class ConsumerGeneratedNameIT {
     private static HttpBridge httpBridge;
     private static WebClient client;
     private static BridgeConfig bridgeConfig;
-    private static JmxCollectorRegistry jmxCollectorRegistry = null;
+    private static JmxMetricsCollector jmxMetricsCollector = null;
 
     ConsumerService consumerService() {
         return ConsumerService.getInstance(client);
@@ -96,7 +95,7 @@ public class ConsumerGeneratedNameIT {
         if ("FALSE".equals(BRIDGE_EXTERNAL_ENV)) {
 
             bridgeConfig = BridgeConfig.fromMap(config);
-            httpBridge = new HttpBridge(bridgeConfig, new MetricsReporter(jmxCollectorRegistry));
+            httpBridge = new HttpBridge(bridgeConfig, jmxMetricsCollector);
 
             LOGGER.info("Deploying in-memory bridge");
             vertx.deployVerticle(httpBridge).onComplete(context.succeeding(id -> context.completeNow()));
