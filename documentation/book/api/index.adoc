@@ -1386,6 +1386,7 @@ Retrieves the bridge metrics in Prometheus format.
 ===== Content Type
 
 * text/plain
+* application/json
 
 ===== Responses
 
@@ -1398,6 +1399,11 @@ Retrieves the bridge metrics in Prometheus format.
 | 200
 | Metrics in Prometheus format retrieved successfully.
 |  <<String>>
+
+
+| 404
+| The metrics endpoint is not enabled.
+|  <<Error>>
 
 |===
 

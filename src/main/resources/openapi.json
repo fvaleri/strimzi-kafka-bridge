@@ -1478,6 +1478,24 @@
                             }
                         },
                         "description": "Metrics in Prometheus format retrieved successfully."
+                    },
+                    "404": {
+                        "description": "The metrics endpoint is not enabled.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Error"
+                                },
+                                "examples": {
+                                    "response": {
+                                        "value": {
+                                            "error_code": 404,
+                                            "message": "The metrics endpoint is not enabled."
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 },
                 "operationId": "metrics",

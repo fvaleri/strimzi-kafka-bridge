@@ -563,7 +563,9 @@ public class HttpBridge extends AbstractVerticle {
                 .setStatusCode(HttpResponseStatus.OK.code())
                 .end(metricsCollector.scrape());
         } else {
-            HttpUtils.sendResponse(routingContext, HttpResponseStatus.NOT_FOUND.code(), null, null);
+            HttpBridgeError error = new HttpBridgeError(HttpResponseStatus.NOT_FOUND.code(), "The metrics endpoint is not enabled.");
+            HttpUtils.sendResponse(routingContext, HttpResponseStatus.NOT_FOUND.code(),
+                BridgeContentType.KAFKA_JSON, JsonUtils.jsonToBytes(error.toJson()));
         }
     }
 
